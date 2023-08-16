@@ -91,3 +91,20 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_sysinfo(void)
+{
+  uint64 si;
+  argaddr(0, &si);
+  struct proc *p = myproc();
+  uint64 countBytes = countfreebytes();
+  if(copyout(p->pagetable, si, (char *)&countBytes, sizeof(countBytes)) < 0) {
+    return -1;
+  }
+  int countProc = countproc();
+  if(copyout(p->pagetable, si+sizeof(countBytes), (char *)&countProc, sizeof(countProc)) < 0) {
+    return -1;
+  }
+  return 0;
+}
