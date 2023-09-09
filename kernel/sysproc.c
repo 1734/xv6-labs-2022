@@ -92,3 +92,31 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_sigalarm(void)
+{
+  struct proc* p = myproc();
+  int tickcount;
+  uint64 handleraddr;
+  argint(0, &tickcount);
+  argaddr(1, &handleraddr);
+  if (tickcount == 0) {
+    p->alarmenabled = 0;
+  } else {
+    p->alarmenabled = 1;
+    p->alarmmaxcount = tickcount;
+    p->alarmhanleraddr = handleraddr;
+  }
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc* p = myproc();
+  p->alarmcurcount = 0;
+  p->alarmhandlerunning = 0;
+  memmove((void*)p->trapframe, (void*)p->alarmtrapframe, sizeof(struct trapframe));
+  return p->trapframe->a0;
+}
