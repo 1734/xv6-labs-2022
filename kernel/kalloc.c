@@ -14,6 +14,10 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+uint8 refercount[RCAN] = {0};
+
+struct spinlock rclock;
+
 struct run {
   struct run *next;
 };
@@ -27,6 +31,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&rclock, "refercount");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -50,6 +55,18 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  // printf("kfree: %p\n", pa);
+  int index = INDEX_PP(pa);
+  acquire(&rclock);
+  if(refercount[index] > 0) {
+    --refercount[index];
+  }
+  if(refercount[index] > 0) {
+    release(&rclock);
+    return;
+  }
+  release(&rclock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -78,5 +95,11 @@ kalloc(void)
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
+  if(r) {
+    acquire(&rclock);
+    refercount[INDEX_PP(r)] = 1;
+    release(&rclock);
+    // printf("kalloc: %p\n", r);
+  }
   return (void*)r;
 }

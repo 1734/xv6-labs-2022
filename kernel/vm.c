@@ -9,11 +9,15 @@
 /*
  * the kernel's page table.
  */
-pagetable_t kernel_pagetable;
+pagetable_t kernel_pagetable = 0;
 
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+
+extern uint8 refercount[RCAN];
+
+extern struct spinlock rclock;
 
 // Make a direct-map page table for the kernel.
 pagetable_t
@@ -125,6 +129,35 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
+uint64
+cow(pagetable_t pagetable, uint64 va)
+{
+  if (va >= MAXVA) {
+    return 0;
+  }
+  pte_t* pte = walk(pagetable, va, 0);
+  if (pte == 0 || (*pte & PTE_COW) == 0) {
+    return 0;
+  }
+  void* newpa = kalloc();
+  if(newpa == 0) {
+    printf("cow: can not kalloc\n");
+    return -1;
+  }
+  uint64 oldpa = PTE2PA(*pte);
+  uint flags = PTE_FLAGS(*pte);
+  flags &= ~PTE_COW;
+  flags |= PTE_W;
+  memmove(newpa, (char*)oldpa, PGSIZE);
+  uvmunmap(pagetable, PGROUNDDOWN(va), 1, 1);
+  if (mappages(pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)newpa, flags) != 0) {
+    kfree(newpa);
+    printf("cow: can not mappages\n");
+    return -1;
+  }
+  return (uint64)newpa;
+}
+
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
@@ -153,8 +186,10 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    if(*pte & PTE_V)
+    if(*pte & PTE_V) {
+      printf("mappages pte: %p a: %p\n", pte, a);
       panic("mappages: remap");
+    }
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -187,6 +222,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
+    // printf("uvmunmap pte: %p a: %p\n", pte, a);
     *pte = 0;
   }
 }
@@ -316,6 +352,18 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    if (((*pte & (PTE_W|PTE_U)) == (PTE_W|PTE_U) ) || (*pte & PTE_COW) != 0) {
+      *pte &= ~PTE_W;
+      *pte |= PTE_COW;
+      flags = PTE_FLAGS(*pte);
+      if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+        goto err;
+      }
+      acquire(&rclock);
+      ++refercount[INDEX_PP(pa)];
+      release(&rclock);
+      continue;
+    }
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
       goto err;
@@ -355,6 +403,13 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    pa0 = cow(pagetable, va0);
+    if(pa0 < 0) {
+      return -1;
+    }
+    if (pa0 == 0) {
+      pa0 = walkaddr(pagetable, va0);
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;

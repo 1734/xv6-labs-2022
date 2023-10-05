@@ -65,14 +65,44 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 15){
+      uint64 va = r_stval();
+      if (va >= MAXVA) {
+        goto unexpected;
+      }
+      pte_t* pte = walk(p->pagetable, va, 0);
+      if (pte == 0 || (*pte & PTE_COW) == 0) {
+        goto unexpected;
+      }
+      void* newpage = kalloc();
+      if(newpage == 0) {
+        printf("usertrap(): can not kalloc, pid=%d\n", p->pid);
+        setkilled(p);
+        goto killed;
+      }
+      uint64 oldpage = PTE2PA(*pte);
+      // printf("oldpage: %p va: %p\n", oldpage, va);
+      uint flags = PTE_FLAGS(*pte);
+      flags &= ~PTE_COW;
+      flags |= PTE_W;
+      memmove(newpage, (char*)oldpage, PGSIZE);
+      uvmunmap(p->pagetable, PGROUNDDOWN(va), 1, 1);
+      if (mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)newpage, flags) != 0) {
+        kfree(newpage);
+        printf("usertrap(): can not mappages, pid=%d\n", p->pid);
+        setkilled(p);
+        goto killed;
+      }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
+unexpected:
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     setkilled(p);
   }
 
+killed:
   if(killed(p))
     exit(-1);
 
