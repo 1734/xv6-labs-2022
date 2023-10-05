@@ -5,6 +5,7 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+// #include "spinlock.h"
 
 /*
  * the kernel's page table.
@@ -129,7 +130,7 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
-uint64
+int64
 cow(pagetable_t pagetable, uint64 va)
 {
   if (va >= MAXVA) {
@@ -141,7 +142,7 @@ cow(pagetable_t pagetable, uint64 va)
   }
   void* newpa = kalloc();
   if(newpa == 0) {
-    printf("cow: can not kalloc\n");
+    printf("cow: can not kalloc, va: %p\n", va);
     return -1;
   }
   uint64 oldpa = PTE2PA(*pte);

@@ -27,6 +27,11 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct pmemrefcount{
+  struct spinlock lock;
+  uint8 count[RCAN];
+} pmemrc;
+
 void
 kinit()
 {
@@ -66,7 +71,6 @@ kfree(void *pa)
     release(&rclock);
     return;
   }
-  release(&rclock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -77,6 +81,7 @@ kfree(void *pa)
   r->next = kmem.freelist;
   kmem.freelist = r;
   release(&kmem.lock);
+  release(&rclock);
 }
 
 // Allocate one 4096-byte page of physical memory.
