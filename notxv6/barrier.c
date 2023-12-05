@@ -38,11 +38,8 @@ barrier()
   } else {
     ++bstate.round;
     bstate.nthread = 0;
+    pthread_cond_broadcast(&bstate.barrier_cond);
     pthread_mutex_unlock(&bstate.barrier_mutex);
-    for (int i = 0; i < nthread-1; ++i) {
-      pthread_cond_broadcast(&bstate.barrier_cond);
-    }
-
   }
 }
 
