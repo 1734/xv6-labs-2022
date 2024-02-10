@@ -10,6 +10,7 @@
 #include "defs.h"
 
 void freerange(void *pa_start, void *pa_end);
+struct run* steal(int id);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
@@ -21,12 +22,14 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem[NCPU];
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  for (int i = 0; i < NCPU; ++i) {
+    initlock(&(kmem[i].lock), "kmem");
+  }
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -56,10 +59,13 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid();
+  acquire(&(kmem[id].lock));
+  r->next = kmem[id].freelist;
+  kmem[id].freelist = r;
+  release(&(kmem[id].lock));
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -70,13 +76,53 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
-
+  push_off();
+  int id = cpuid();
+  acquire(&(kmem[id].lock));
+  r = kmem[id].freelist;
+  if(r) {
+    kmem[id].freelist = r->next;
+  }
+  release(&(kmem[id].lock));
+  if (!r && (r = steal(id))){
+    acquire(&(kmem[id].lock));
+    kmem[id].freelist = r->next;
+    release(&(kmem[id].lock));
+  }
+  pop_off();
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+struct run *
+steal(int id)
+{
+  struct run *r = 0;
+  for (int i = 1; i < NCPU; ++i) {
+    if(++id == NCPU) {
+      id = 0;
+    }
+    acquire(&(kmem[id].lock));
+    r = kmem[id].freelist;
+    if (r == 0) {
+      release(&(kmem[id].lock));
+      continue;
+    }
+    struct run *slow = r;
+    struct run *fast = slow->next;
+    while(fast) {
+      slow = slow->next;
+      fast = fast->next;
+      if(fast == 0) {
+        break;
+      }
+      fast = fast->next;
+    }
+    kmem[id].freelist = slow->next;
+    release(&(kmem[id].lock));
+    slow->next = 0;
+    return r;
+  }
+  return 0;
 }
