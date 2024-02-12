@@ -2,6 +2,7 @@
 // Both the kernel and user programs use this header file.
 
 
+#include "param.h"
 #define ROOTINO  1   // root i-number
 #define BSIZE 1024  // block size
 
@@ -37,6 +38,8 @@ struct dinode {
   short nlink;          // Number of links to inode in file system
   uint size;            // Size of file (bytes)
   uint addrs[NDIRECT+2];   // Data block addresses
+  char target_path[MAXPATH];
+  char reserved[64];
 };
 
 // Inodes per block.
