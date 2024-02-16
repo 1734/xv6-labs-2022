@@ -5,6 +5,11 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "buf.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -15,6 +20,8 @@ extern char trampoline[], uservec[], userret[];
 void kernelvec();
 
 extern int devintr();
+
+static int vmamap();
 
 void
 trapinit(void)
@@ -66,6 +73,8 @@ usertrap(void)
 
     syscall();
   } else if((which_dev = devintr()) != 0){
+    // ok
+  } else if(vmamap() == 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
@@ -219,3 +228,79 @@ devintr()
   }
 }
 
+struct vma* find_vma(uint64 addr) {
+  struct proc* p = myproc();
+  for (uint i = 0; i < NOFILE; ++i) {
+    if (p->mfile[i].used && addr >= p->mfile[i].ustart && addr < p->mfile[i].uend) {
+      return &p->mfile[i];
+    }
+  }
+  return 0;
+}
+
+static int vmamap()
+{
+  if (r_scause() != 13 && r_scause() != 15) {
+    return -1;
+  }
+  uint64 addr = r_stval();
+  struct vma* mf;
+  if ((mf = find_vma(addr)) == 0) {
+    return -1;
+  }
+  if (!(mf->prot & PROT_WRITE) && (r_scause() == 15)) {
+    return -1;
+  }
+  struct proc* p = myproc();
+  int perm = PTE_U|PTE_R;
+  if (mf->prot | PROT_WRITE) {
+    perm = perm | PTE_W;
+  }
+  struct inode* ip = mf->file->ip;
+  if (mf->flags & MAP_SHARED) {
+    perm = perm | PTE_S;
+    begin_op();
+    ilock(ip);
+    uint off = addr - mf->ustart_orig + mf->offset;
+    uint blockno = bmap(ip, off/PGSIZE);
+    if (blockno == 0) {
+      return -1;
+    }
+    struct buf* b = bread(ip->dev, blockno);
+    bpin(b);
+    if (mappages(p->pagetable, PGROUNDDOWN(addr), PGSIZE, (uint64)b->data, perm) < 0) {
+      bunpin(b);
+      brelse(b);
+      iunlock(ip);
+      end_op();
+      return -1;
+    }
+    brelse(b);
+    if (PGROUNDDOWN(off) + PGSIZE > ip->size) {
+      ip->size = PGROUNDDOWN(off) + PGSIZE;
+    }
+    iupdate(ip);
+    iunlock(ip);
+    end_op();
+  } else {
+    uint64 pa;
+    if ((pa = (uint64)kalloc()) == 0) {
+      return -1;
+    }
+    memset((void*)pa, 0, PGSIZE);
+    if (mappages(p->pagetable, PGROUNDDOWN(addr), PGSIZE, pa, perm) < 0) {
+      return -1;
+    }
+    ilock(ip);
+    int read_len = PGSIZE;
+    if (PGROUNDDOWN(addr) + PGSIZE > mf->ustart_orig + mf->length) {
+      read_len = mf->ustart_orig + mf->length - PGROUNDDOWN(addr);
+    }
+    readi(ip, 0, pa, mf->offset + PGROUNDDOWN(addr) - mf->ustart_orig, read_len);
+    iunlock(ip);
+    // if (actual_read_len != read_len) {
+    //   return -1;
+    // }
+  }
+  return 0;
+}

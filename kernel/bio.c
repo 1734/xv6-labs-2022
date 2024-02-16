@@ -50,6 +50,11 @@ binit(void)
     bcache.head.next->prev = b;
     bcache.head.next = b;
   }
+  for (uint i = 0; i < NBUF; ++i) {
+    if ((bcache.buf[i].data = kalloc()) == 0) {
+      panic("binit");
+    }
+  }
 }
 
 // Look through buffer cache for block on device dev.
@@ -150,4 +155,18 @@ bunpin(struct buf *b) {
   release(&bcache.lock);
 }
 
-
+int
+bpindata(uchar* data) {
+  struct buf *b;
+  acquire(&bcache.lock);
+  // Is the block already cached?
+  for(b = bcache.head.next; b != &bcache.head; b = b->next){
+    if(b->data == data){
+      b->refcnt++;
+      release(&bcache.lock);
+      return 0;
+    }
+  }
+  release(&bcache.lock);
+  return -1;
+}

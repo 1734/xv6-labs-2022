@@ -16,6 +16,7 @@ void            brelse(struct buf*);
 void            bwrite(struct buf*);
 void            bpin(struct buf*);
 void            bunpin(struct buf*);
+int             bpindata(uchar*);
 
 // console.c
 void            consoleinit(void);
@@ -53,7 +54,7 @@ int             readi(struct inode*, int, uint64, uint, uint);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, int, uint64, uint, uint);
 void            itrunc(struct inode*);
-
+uint            bmap(struct inode*, uint);
 // ramdisk.c
 void            ramdiskinit(void);
 void            ramdiskintr(void);
@@ -147,6 +148,7 @@ void            trapinit(void);
 void            trapinithart(void);
 extern struct spinlock tickslock;
 void            usertrapret(void);
+struct vma* find_vma(uint64 addr);
 
 // uart.c
 void            uartinit(void);
@@ -184,6 +186,9 @@ void            plic_complete(int);
 void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
+
+// sysfile.c
+int vma_unmap_single(struct vma* mf, uint64* vastart, uint64* vaend);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

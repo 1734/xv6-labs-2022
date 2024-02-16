@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -499,6 +500,149 @@ sys_pipe(void)
     p->ofile[fd1] = 0;
     fileclose(rf);
     fileclose(wf);
+    return -1;
+  }
+  return 0;
+}
+
+uint64
+sys_mmap(void)
+{
+  struct proc* p = myproc();
+  struct vma* mf = 0;
+  uint length, offset;
+  int prot, flags, fd;
+  argint(1, (int*)&length);
+  argint(2, &prot);
+  argint(3, &flags);
+  argint(4, &fd);
+  argint(5, (int*)&offset);
+  if (length == 0) {
+    return -1;
+  }
+  if (offset % PGSIZE != 0) {
+    return -1;
+  }
+  if ((flags & MAP_SHARED) && (flags & MAP_PRIVATE)) {
+    return -1;
+  }
+  struct file* f = p->ofile[fd];
+  if (f->type != FD_INODE) {
+    return -1;
+  }
+  if ((flags & MAP_SHARED) && (prot & PROT_WRITE) && !f->writable) {
+    return -1;
+  }
+  if (PGROUNDUP(p->sz) + PGROUNDUP(length) > TRAPFRAME) {
+    return -1;
+  }
+  for(int i = 0; i < NOFILE; ++i) {
+    if (!p->mfile[i].used) {
+      mf = &p->mfile[i];
+      mf->used = 1;
+      break;
+    }
+  }
+  if (mf == 0) {
+    return -1;
+  }
+  mf->length = length;
+  mf->prot = prot;
+  mf->flags = flags;
+  mf->offset = offset;
+  mf->file = f;
+  filedup(f);
+  mf->ustart = PGROUNDUP(p->sz);
+  mf->uend = mf->ustart + PGROUNDUP(length);
+  mf->ustart_orig = mf->ustart;
+  mf->uend_orig = mf->uend;
+  p->sz = mf->uend;
+  return mf->ustart;
+}
+
+#define min(x,y) (x) <= (y) ? (x) : (y)
+#define max(x,y) (x) >= (y) ? (x) : (y)
+
+int vma_unmap_single(struct vma* mf, uint64* vastart, uint64* vaend) {
+  if (!mf->used) {
+    return 0;
+  }
+  uint64 start, end; // unmap range
+  if (vastart == 0 || vaend == 0) {
+    start = mf->ustart;
+    end = mf->uend;
+    mf->ustart = mf->uend;
+  } else {
+    if (*vastart == *vaend) {
+      return 0;
+    }
+    if (mf->ustart != *vastart && mf->uend != *vaend) {
+      return 0;
+    }
+    if (mf->ustart == *vastart) {
+      start = mf->ustart;
+      end = min(mf->uend, *vaend);
+      mf->ustart = end;
+      *vastart = end;
+    } else {
+      end = mf->uend;
+      start = max(mf->ustart, *vastart);
+      mf->uend = start;
+      *vaend = start;
+    }
+  }
+  uint64 npages = (end - start) / PGSIZE;
+  struct inode* ip = mf->file->ip;
+  if (mf->flags & MAP_SHARED) {
+    uvmunmap(myproc()->pagetable, start, npages, 0);
+    for(uint64 va = start; va < end; va += PGSIZE) {
+      begin_op();
+      ilock(ip);
+      uint64 off = va - mf->ustart_orig + mf->offset;
+      uint blockno = bmap(ip, off/PGSIZE);
+      if (blockno == 0) {
+        panic("vma_unmap_single");
+      }
+      struct buf* b = bread(ip->dev, blockno);
+      log_write(b);
+      bunpin(b);
+      brelse(b);
+      iunlock(ip);
+      end_op();
+    }
+  } else {
+    uvmunmap(myproc()->pagetable, start, npages, 1);
+  }
+  if (mf->ustart == mf->uend) {
+    fileclose(mf->file);
+    mf->used = 0;
+  }
+  return 1;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  uint length;
+  argaddr(0, &addr);
+  argint(1, (int*)&length);
+  struct vma* mf;
+  uint64 vastart = PGROUNDDOWN(addr);
+  uint64 vaend = PGROUNDUP(addr + length);
+  uchar goon = 1;
+  while(goon && (vastart < vaend)) {
+    goon = 0;
+    for(int i = 0; i < NOFILE; ++i) {
+      if (vma_unmap_single(&myproc()->mfile[i], &vastart, &vaend) == 1) {
+        goon = 1;
+      }
+      if (vastart >= vaend) {
+        break;
+      }
+    }
+  }
+  if (vastart != vaend) {
     return -1;
   }
   return 0;

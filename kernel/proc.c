@@ -306,6 +306,12 @@ fork(void)
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
+  for(i = 0; i < NOFILE; i++) {
+    np->mfile[i] = p->mfile[i];
+    if (p->mfile[i].used) {
+      filedup(p->mfile[i].file);
+    }
+  }
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
@@ -358,6 +364,10 @@ exit(int status)
       fileclose(f);
       p->ofile[fd] = 0;
     }
+  }
+
+  for(int i = 0; i < NOFILE; ++i) {
+    vma_unmap_single(&p->mfile[i], 0, 0);
   }
 
   begin_op();

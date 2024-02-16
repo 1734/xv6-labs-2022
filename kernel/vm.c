@@ -5,6 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "buf.h"
+#include "vma.h"
+#include "file.h"
 
 /*
  * the kernel's page table.
@@ -177,16 +182,32 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+    if((pte = walk(pagetable, a, 0)) == 0) {
+      continue;
+      // panic("uvmunmap: walk");
+    }
+    if((*pte & PTE_V) == 0) {
+      continue;
+      // panic("uvmunmap: not mapped");
+    }
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
+    // uint64 pa = PTE2PA(*pte);
+    // if(*pte & PTE_S) {
+    //   struct buf* b = (struct buf*)pa;
+    //   begin_op();
+    //   acquiresleep(&b->lock);
+    //   log_write(b);
+    //   releasesleep(&b->lock);
+    //   end_op();
+    //   bunpin(b);
+    // } else if(do_free){
+    //   kfree((void*)pa);
+    // }
     *pte = 0;
   }
 }
@@ -313,13 +334,20 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+    if((*pte & PTE_V) == 0) {
+      // panic("uvmcopy: page not present");
+      continue;
+    }
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
+    if (flags & PTE_S) {
+      mem = (char*)pa;
+      bpindata((uchar*)pa);
+    } else {
+      if((mem = kalloc()) == 0)
+        goto err;
+      memmove(mem, (char*)pa, PGSIZE);
+    }
     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
       kfree(mem);
       goto err;
