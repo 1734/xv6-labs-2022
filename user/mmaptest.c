@@ -171,10 +171,7 @@ mmap_test(void)
   // file opened read/write.
   if ((fd = open(f, O_RDWR)) == -1)
     err("open");
-  printf("11111\n");
   p = mmap(0, PGSIZE*3, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  printf("p: %p\n", p);
-  printf("22222\n");
   if (p == MAP_FAILED)
     err("mmap (3)");
   if (close(fd) == -1)
@@ -184,7 +181,6 @@ mmap_test(void)
   // printf("%c %c\n", c1, c2);
   // check that the mapping still works after close(fd).
   _v1(p);
-  printf("33333\n");
 
   // write the mapped memory.
   for (i = 0; i < PGSIZE*2; i++)
@@ -301,8 +297,6 @@ fork_test(void)
   if((pid = fork()) < 0)
     err("fork");
   if (pid == 0) {
-    printf("11111\n");
-    printf("child p1: %p\n", p1);
     _v1(p1);
     munmap(p1, PGSIZE); // just the first page
     exit(0); // tell the parent that the mapping looks OK.
@@ -318,7 +312,6 @@ fork_test(void)
 
   // // check that the parent's mappings are still there.
   _v1(p1);
-  printf("22222\n");
   _v1(p2);
 
   printf("fork_test OK\n");
